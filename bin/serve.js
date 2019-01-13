@@ -244,6 +244,36 @@ const startEndpoint = (endpoint, config, args, previous) => {
 	});
 };
 
+// adds commands
+// --inject-from=CLIENT* - glob style pattern to inject 
+// --inject-into=index.html - glob style pattern for files to inject to
+
+const getClientConfig = (envVars, envVarPattern) => {
+    const config = Object.keys(envVars)
+        .filter(envVar => envVar.startsWith(envVarPattern))
+        .reduce((clientConfig, key) => {
+            clientConfig[key] = envVars[key];
+            return clientConfig;
+		}, {});
+    return config;
+};
+
+const pathMatchesPattern = (path, pattern) => {
+    return path === pattern;
+};
+
+const createReadStreamFuncFactory = (envVarPattern, pathPattern) => (path, opts) => {
+	if (pathMatchesPattern(path, pathPattern)) {
+		let template = marko.load(require.resolve(path));
+
+		return template.stream({
+			"__ENVIRONMENT__": getClientConfig(process.env, envVarPattern)
+		});
+	} else {
+		return fs.createReadStream(path, opts);
+	}
+};
+
 const loadConfig = async (cwd, entry, args) => {
 	const files = [
 		'serve.json',
@@ -341,6 +371,8 @@ const loadConfig = async (cwd, entry, args) => {
 			'--config': String,
 			'--no-clipboard': Boolean,
 			'--no-compression': Boolean,
+			'--inject-env': String, // glob-style pattern to take and inject keys into environment
+			'--inject-matching': String, // 
 			'-h': '--help',
 			'-v': '--version',
 			'-l': '--listen',
@@ -395,6 +427,12 @@ const loadConfig = async (cwd, entry, args) => {
 			source: '**',
 			destination: '/index.html'
 		}, ...existingRewrites];
+	}
+
+	if (args['--inject-env'] && args['--inject-matching']) {
+		config.methods = Object.assign({}, config.methods, {
+			createReadStream: createReadStreamFuncFactory(args['--inject-env'], args['--inject-matching'])
+		});
 	}
 
 	for (const endpoint of args['--listen']) {
