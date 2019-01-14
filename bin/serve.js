@@ -166,7 +166,7 @@ const getNetworkAddress = () => {
 	}
 };
 
-const matches = (absPath, pattern) => pattern.exec(absPath);
+const matches = (str, pattern) => pattern.exec(str);
 
 const filterEntries = (envVars, pattern) => {
 	const prefixPattern = new RegExp(`^${pattern}`);
