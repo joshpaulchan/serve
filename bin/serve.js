@@ -166,6 +166,29 @@ const getNetworkAddress = () => {
 	}
 };
 
+const matches = (absPath, pattern) => pattern.exec(absPath);
+
+const filterEntries = (envVars, pattern) => {
+	const prefixPattern = new RegExp(`^${pattern}`);
+	return Object.keys(envVars)
+		.filter((envVarKey) => matches(envVarKey, prefixPattern))
+		.reduce((result, key) => {
+			result[key] = envVars[key];
+			return result;
+		}, {});
+};
+
+const createReadStreamFuncFactory = (envVarPattern, pathPattern) => (absPath, opts) => {
+	const compiledPathPattern = new RegExp(pathPattern);
+	if (!matches(absPath, compiledPathPattern)) {
+		return fs.createReadStream(absPath, opts);
+	}
+	const template = marko.load(require.resolve(absPath));
+	return template.stream({
+		__ENVIRONMENT__: JSON.stringify(filterEntries(process.env, envVarPattern))
+	});
+};
+
 const startEndpoint = (endpoint, config, args, previous) => {
 	const {isTTY} = process.stdout;
 	const clipboard = args['--no-clipboard'] !== true;
@@ -176,11 +199,10 @@ const startEndpoint = (endpoint, config, args, previous) => {
 		if (compress) {
 			await compressionHandler(request, response);
 		}
-
-		const methodOverrides = injectEnvVariables ?
-		{ createReadStream: createReadStreamFuncFactory(args['--inject-env'], args['--inject-files'])}
-		:
-		{};
+		const methodOverrides = {};
+		if (injectEnvVariables) {
+			methodOverrides.createReadStream = createReadStreamFuncFactory(args['--inject-env'], args['--inject-files']);
+		}
 		return handler(request, response, config, methodOverrides);
 	});
 
@@ -247,29 +269,6 @@ const startEndpoint = (endpoint, config, args, previous) => {
 			const suffix = localAddress ? ` at ${localAddress}` : '';
 			console.log(info(`Accepting connections${suffix}`));
 		}
-	});
-};
-
-const matches = (absPath, pattern) => pattern.exec(absPath);
-
-const filterEntries = (envVars, pattern) => {
-	const prefixPattern = new RegExp(`^${pattern}`);
-	return Object.keys(envVars)
-		.filter((envVarKey) => matches(envVarKey, prefixPattern))
-		.reduce((result, key) => {
-			result[key] = envVars[key];
-			return result;
-		}, {});
-};
-
-const createReadStreamFuncFactory = (envVarPattern, pathPattern) => (absPath, opts) => {
-	const compiledPathPattern = new RegExp(pathPattern);
-	if (!matches(absPath, compiledPathPattern)) {
-		return fs.createReadStream(absPath, opts);
-	}
-	const template = marko.load(require.resolve(absPath));
-	return template.stream({
-		__ENVIRONMENT__: JSON.stringify(filterEntries(process.env, envVarPattern))
 	});
 };
 
