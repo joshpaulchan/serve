@@ -18,6 +18,7 @@ const handler = require('serve-handler');
 const schema = require('@zeit/schemas/deployment/config-static');
 const boxen = require('boxen');
 const compression = require('compression');
+const marko = require('marko');
 
 // Utilities
 const pkg = require('../package');
@@ -169,13 +170,18 @@ const startEndpoint = (endpoint, config, args, previous) => {
 	const {isTTY} = process.stdout;
 	const clipboard = args['--no-clipboard'] !== true;
 	const compress = args['--no-compression'] !== true;
+	const injectEnvVariables = new Boolean(args['--inject-env']);
 
 	const server = http.createServer(async (request, response) => {
 		if (compress) {
 			await compressionHandler(request, response);
 		}
 
-		return handler(request, response, config);
+		const methodOverrides = injectEnvVariables ?
+		{ createReadStream: createReadStreamFuncFactory(args['--inject-env'], args['--inject-files'])}
+		:
+		{};
+		return handler(request, response, config, methodOverrides);
 	});
 
 	server.on('error', (err) => {
@@ -244,34 +250,27 @@ const startEndpoint = (endpoint, config, args, previous) => {
 	});
 };
 
-// adds commands
-// --inject-from=CLIENT* - glob style pattern to inject 
-// --inject-into=index.html - glob style pattern for files to inject to
+const matches = (absPath, pattern) => pattern.exec(absPath);
 
-const getClientConfig = (envVars, envVarPattern) => {
-    const config = Object.keys(envVars)
-        .filter(envVar => envVar.startsWith(envVarPattern))
-        .reduce((clientConfig, key) => {
-            clientConfig[key] = envVars[key];
-            return clientConfig;
+const filterEntries = (envVars, pattern) => {
+	const prefixPattern = new RegExp(`^${pattern}`);
+	return Object.keys(envVars)
+		.filter((envVarKey) => matches(envVarKey, prefixPattern))
+		.reduce((result, key) => {
+			result[key] = envVars[key];
+			return result;
 		}, {});
-    return config;
 };
 
-const pathMatchesPattern = (path, pattern) => {
-    return path === pattern;
-};
-
-const createReadStreamFuncFactory = (envVarPattern, pathPattern) => (path, opts) => {
-	if (pathMatchesPattern(path, pathPattern)) {
-		let template = marko.load(require.resolve(path));
-
-		return template.stream({
-			"__ENVIRONMENT__": getClientConfig(process.env, envVarPattern)
-		});
-	} else {
-		return fs.createReadStream(path, opts);
+const createReadStreamFuncFactory = (envVarPattern, pathPattern) => (absPath, opts) => {
+	const compiledPathPattern = new RegExp(pathPattern);
+	if (!matches(absPath, compiledPathPattern)) {
+		return fs.createReadStream(absPath, opts);
 	}
+	const template = marko.load(require.resolve(absPath));
+	return template.stream({
+		__ENVIRONMENT__: JSON.stringify(filterEntries(process.env, envVarPattern))
+	});
 };
 
 const loadConfig = async (cwd, entry, args) => {
@@ -371,8 +370,10 @@ const loadConfig = async (cwd, entry, args) => {
 			'--config': String,
 			'--no-clipboard': Boolean,
 			'--no-compression': Boolean,
-			'--inject-env': String, // glob-style pattern to take and inject keys into environment
-			'--inject-matching': String, // 
+			// regex pattern - load env variables matching pattern
+			'--inject-env': String,
+			// regex pattern - inject environment variables into files matching pattern
+			'--inject-files': String,
 			'-h': '--help',
 			'-v': '--version',
 			'-l': '--listen',
@@ -427,12 +428,6 @@ const loadConfig = async (cwd, entry, args) => {
 			source: '**',
 			destination: '/index.html'
 		}, ...existingRewrites];
-	}
-
-	if (args['--inject-env'] && args['--inject-matching']) {
-		config.methods = Object.assign({}, config.methods, {
-			createReadStream: createReadStreamFuncFactory(args['--inject-env'], args['--inject-matching'])
-		});
 	}
 
 	for (const endpoint of args['--listen']) {
